@@ -1,56 +1,184 @@
 import socket
 import threading
+import base64
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import PKCS1_OAEP, AES
+from Crypto.Hash import SHA256
+from Crypto.Signature import PKCS1_v1_5
 
-#prints incoming messages when they get recieved
-def listen(c):
+# RSA KEY GENERATION (SERVER)
+rsa_key = RSA.generate(2048)
+private_key = rsa_key
+public_key = rsa_key.publickey()
+
+print("Server RSA keys generated.")
+
+# Each client: {'socket', 'aes_key', 'aes_nonce', 'public_key'}
+clients = []
+MAX_CLIENTS = 5
+lock = threading.Lock()   # to protect clients list
+
+
+def relay_messages(index):
+    """
+    Receive signed+encrypted messages from one client,
+    verify signature, then re-encrypt and forward to all others.
+    """
     while True:
-        msg = c.recv(1024)
-        if msg:
-            print(f"\033[0;32mRecieved: \033[0;33m{msg.decode()}\033[0;1m")
+        with lock:
+            if index >= len(clients):
+                return
+            client_info = clients[index]
+        client_sock = client_info['socket']
+        aes_key = client_info['aes_key']
+        aes_nonce = client_info['aes_nonce']
+        client_pub = client_info['public_key']
 
-#sends messages
-def send(c):
+        try:
+            data = client_sock.recv(4096)
+            if not data:
+                print(f"Client {index+1} disconnected.")
+                with lock:
+                    try:
+                        client_sock.close()
+                    except:
+                        pass
+                return
+
+            try:
+                sig_b64, enc_b64 = data.split(b'||', 1)
+            except ValueError:
+                print("Received malformed packet from client", index + 1)
+                continue
+
+            # Decode signature and AES ciphertext+tag
+            try:
+                sig = base64.b64decode(sig_b64)
+                enc = base64.b64decode(enc_b64)
+            except Exception:
+                print("Base64 decode error from client", index + 1)
+                continue
+
+            # Split ciphertext and tag (last 16 bytes = tag)
+            ciphertext = enc[:-16]
+            tag = enc[-16:]
+
+            # Decrypt with this client's AES key
+            try:
+                cipher_aes = AES.new(aes_key, AES.MODE_EAX, nonce=aes_nonce)
+                plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
+            except Exception:
+                print("AES decrypt/tag verify FAILED from client", index + 1)
+                continue
+
+            # Verify signature over the plaintext
+            h = SHA256.new(plaintext)
+            verifier = PKCS1_v1_5.new(client_pub)
+            try:
+                verifier.verify(h, sig)
+            except (ValueError, TypeError):
+                print("Signature verification FAILED from client", index + 1)
+                continue
+
+            print(f"Verified message from client {index + 1}: {plaintext.decode('utf-8', errors='ignore')}")
+
+            # Forward plaintext to all OTHER clients that are connected
+            with lock:
+                for j, other in enumerate(clients):
+                    if j == index:
+                        continue
+                    other_sock = other['socket']
+                    other_key = other['aes_key']
+                    other_nonce = other['aes_nonce']
+
+                    try:
+                        out_cipher = AES.new(other_key, AES.MODE_EAX, nonce=other_nonce)
+                        out_ct, out_tag = out_cipher.encrypt_and_digest(plaintext)
+                        out_enc_b64 = base64.b64encode(out_ct + out_tag)
+                        # NOTE: we forward ONLY encrypted message (no sig) –
+                        # clients just decrypt and print.
+                        other_sock.send(out_enc_b64)
+                    except Exception:
+                        # ignore failed send to that client
+                        pass
+
+        except Exception:
+            print(f"Error in relay thread for client {index+1}")
+            return
+
+
+def handle_handshake(client_socket):
+    # Send server public key
+    client_socket.send(public_key.export_key())
+
+    # Receive CLIENT public key
+    client_pub_data = client_socket.recv(4096)
+    if not client_pub_data:
+        return None, None, None
+    client_public_key = RSA.import_key(client_pub_data)
+
+    # Receive encrypted AES key info
+    encrypted_data = client_socket.recv(4096)
+    if not encrypted_data:
+        return None, None, None
+
+    rsa_cipher = PKCS1_OAEP.new(private_key)
+    decrypted = rsa_cipher.decrypt(encrypted_data)
+
+    # decrypted = AES_key (16 bytes) + nonce (16 bytes)
+    aes_key = decrypted[:16]
+    aes_nonce = decrypted[16:32]
+
+    print("Handshake complete: AES key and nonce received from client.")
+    return client_public_key, aes_key, aes_nonce
+
+# SERVER SETUP
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind(('', 5000))
+server.listen(MAX_CLIENTS)
+
+print(f"Server listening on port 5000, up to {MAX_CLIENTS} clients...")
+
+def accept_loop():
     while True:
-        msg = input()
-        c.send(msg.encode())
- 
+        client_sock, addr = server.accept()
+        with lock:
+            if len(clients) >= MAX_CLIENTS:
+                print("Max clients reached, rejecting new connection from", addr)
+                client_sock.close()
+                continue
 
-# take the server name and port name
-host = 'local host'
-port = 5000
- 
-# create a socket at server side
-# using TCP / IP protocol
-s = socket.socket(socket.AF_INET, 
-                  socket.SOCK_STREAM)
- 
-# bind the socket with server
-# and port number
-s.bind(('', port))
- 
-# allow maximum 1 connection to
-# the socket
-s.listen(1)
- 
-# wait till a client accept
-# connection
-c, addr = s.accept()
- 
-# display client address
-print("CONNECTION FROM:", str(addr))
+        print(f"New client connected from {addr}")
 
-print("Send and Recieve Messages Below:")
-print("\033[0;31m")
+        client_pub, aes_k, aes_n = handle_handshake(client_sock)
+        if client_pub is None:
+            print("Handshake failed; closing client.")
+            client_sock.close()
+            continue
 
-#create and join a sending and recieving thread
-listen_thread = threading.Thread(target=listen, args = (c,))
-send_thread = send_thread = threading.Thread(target=send, args = (c,))
-listen_thread.start()
-send_thread.start()
-listen_thread.join()
-send_thread.join()
+        with lock:
+            index = len(clients)
+            clients.append({
+                'socket': client_sock,
+                'aes_key': aes_k,
+                'aes_nonce': aes_n,
+                'public_key': client_pub
+            })
 
-# disconnect the server
-c.close()
-print("closed")
+        print(f"Client {index+1} fully registered. Total clients: {len(clients)}")
 
+        # Start a relay thread for THIS client immediately
+        threading.Thread(target=relay_messages, args=(index,), daemon=True).start()
+
+
+# Start accepting clients
+accept_thread = threading.Thread(target=accept_loop, daemon=True)
+accept_thread.start()
+
+# Keep server main thread alive
+try:
+    while True:
+        pass
+except KeyboardInterrupt:
+    print("\nServer shutting down...")
+    server.close()
