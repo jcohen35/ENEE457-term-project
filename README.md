@@ -5,7 +5,7 @@ How to run:
     - source <environment name>/bin/activate
   - Powershell:
     - python -m venv venv
-    - .\.venv\bin\activate.ps1
+    - .venv\bin\activate.ps1
 2. Install Pycryptodome package if not done so already:
   - For WSL: python3 -m pip install <package name>
   - For Powershell: python -m pip install <package name>
