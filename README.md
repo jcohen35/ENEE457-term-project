@@ -19,6 +19,9 @@
   - On WSL, run ifconfig
     - It will be the eth0 inet address
 
+
 Now you should be able to send a message on one client, watch the server read it, and see the message show up on the other client's side.
 
-To disconnect, press Ctrl+C on the server terminal. We are working on disconnecting the client-side.
+
+## To disconnect: 
+  - Press Ctrl+C on the server terminal. We are working on disconnecting the client-side.
