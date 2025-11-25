@@ -9,6 +9,7 @@ from Crypto.Signature import PKCS1_v1_5
 
 # CLIENT CONNECTS TO SERVER
 server_ip = input("Enter server IP: ")  # IPv4 address
+client_name = input("Enter your name: ")
 port = 5000
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -77,13 +78,18 @@ def listen():
             data = s.recv(4096)
             if data:
                 try:
-                    try:
-                        sig_b64, enc_b64 = data.split(b'||', 1)
-                    except ValueError:
-                        enc_b64 = data
+                    parts = data.split(b'||')
 
+                    if len(parts) != 3:
+                        print("[Malformed packet received]")
+                        continue
+                    sig_b64, enc_b64, name_b64 = parts
                     msg = decrypt_message(enc_b64)
-                    print(f"\n[Friend]: {msg}")
+                    sender = name_b64.decode()
+                    print(f"\n{sender}: {msg}")
+                except ValueError:
+                    print("\n[Malformed packet received]")
+
                 except Exception:
                     print("\n[Error decrypting message]")
         except:
@@ -95,12 +101,14 @@ def send():
         msg = input()
         # encrypt the message with AES
         encrypted = encrypt_message(msg)
+        name = client_name.encode()
         # sign the plaintext message
         sig = signature(msg.encode())
         sig_b64 = base64.b64encode(sig)
 
-        packet = sig_b64 + b'||' + encrypted
+        packet = sig_b64 + b'||' + encrypted + b'||' + name
         s.send(packet)
+        s.send(client_name.encode())
 
 # Start both threads
 t_listen = threading.Thread(target=listen)

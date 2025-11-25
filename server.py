@@ -46,7 +46,7 @@ def relay_messages(index):
                 return
 
             try:
-                sig_b64, enc_b64 = data.split(b'||', 1)
+                sig_b64, enc_b64, name_b64 = data.split(b'||', 2)
             except ValueError:
                 print("Received malformed packet from client", index + 1)
                 continue
@@ -97,7 +97,12 @@ def relay_messages(index):
                         out_enc_b64 = base64.b64encode(out_ct + out_tag)
                         # NOTE: we forward ONLY encrypted message (no sig) –
                         # clients just decrypt and print.
-                        other_sock.send(out_enc_b64)
+                        packet = b'||'.join([
+                            b'',             
+                            out_enc_b64,    
+                            name_b64
+                        ])
+                        other_sock.send(packet)
                     except Exception:
                         # ignore failed send to that client
                         pass
@@ -114,13 +119,13 @@ def handle_handshake(client_socket):
     # Receive CLIENT public key
     client_pub_data = client_socket.recv(4096)
     if not client_pub_data:
-        return None, None, None
+        return None, None, None, None
     client_public_key = RSA.import_key(client_pub_data)
 
     # Receive encrypted AES key info
     encrypted_data = client_socket.recv(4096)
     if not encrypted_data:
-        return None, None, None
+        return None, None, None, None
 
     rsa_cipher = PKCS1_OAEP.new(private_key)
     decrypted = rsa_cipher.decrypt(encrypted_data)
@@ -130,8 +135,7 @@ def handle_handshake(client_socket):
     aes_nonce = decrypted[16:32]
 
     print("Handshake complete: AES key and nonce received from client.")
-    return client_public_key, aes_key, aes_nonce
-
+    return client_public_key, aes_key, aes_nonce, None
 # SERVER SETUP
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(('', 5000))
@@ -150,7 +154,7 @@ def accept_loop():
 
         print(f"New client connected from {addr}")
 
-        client_pub, aes_k, aes_n = handle_handshake(client_sock)
+        client_pub, aes_k, aes_n, client_name = handle_handshake(client_sock)
         if client_pub is None:
             print("Handshake failed; closing client.")
             client_sock.close()
