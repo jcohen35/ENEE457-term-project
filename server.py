@@ -46,66 +46,132 @@ def relay_messages(index):
                 return
 
             try:
-                sig_b64, enc_b64, name_b64 = data.split(b'||', 2)
+                data_lst = data.split(b'||')
             except ValueError:
                 print("Received malformed packet from client", index + 1)
                 continue
 
-            # Decode signature and AES ciphertext+tag
-            try:
-                sig = base64.b64decode(sig_b64)
-                enc = base64.b64decode(enc_b64)
-            except Exception:
-                print("Base64 decode error from client", index + 1)
-                continue
+            if len(data_lst) == 3: # for normal message
+                sig_b64, enc_b64, name_b64 = data_lst
 
-            # Split ciphertext and tag (last 16 bytes = tag)
-            ciphertext = enc[:-16]
-            tag = enc[-16:]
+                # Decode signature and AES ciphertext+tag
+                try:
+                    sig = base64.b64decode(sig_b64)
+                    enc = base64.b64decode(enc_b64)
+                except Exception:
+                    print("Base64 decode error from client", index + 1)
+                    continue
 
-            # Decrypt with this client's AES key
-            try:
-                cipher_aes = AES.new(aes_key, AES.MODE_EAX, nonce=aes_nonce)
-                plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
-            except Exception:
-                print("AES decrypt/tag verify FAILED from client", index + 1)
-                continue
+                # Split ciphertext and tag (last 16 bytes = tag)
+                ciphertext = enc[:-16]
+                tag = enc[-16:]
 
-            # Verify signature over the plaintext
-            h = SHA256.new(plaintext)
-            verifier = PKCS1_v1_5.new(client_pub)
-            try:
-                verifier.verify(h, sig)
-            except (ValueError, TypeError):
-                print("Signature verification FAILED from client", index + 1)
-                continue
+                # Decrypt with this client's AES key
+                try:
+                    cipher_aes = AES.new(aes_key, AES.MODE_EAX, nonce=aes_nonce)
+                    plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
+                except Exception:
+                    print("AES decrypt/tag verify FAILED from client", index + 1)
+                    continue
 
-            print(f"Verified message from client {index + 1}: {plaintext.decode('utf-8', errors='ignore')}")
+                # Verify signature over the plaintext
+                h = SHA256.new(plaintext)
+                verifier = PKCS1_v1_5.new(client_pub)
+                try:
+                    verifier.verify(h, sig)
+                except (ValueError, TypeError):
+                    print("Signature verification FAILED from client", index + 1)
+                    continue
 
-            # Forward plaintext to all OTHER clients that are connected
-            with lock:
-                for j, other in enumerate(clients):
-                    if j == index:
-                        continue
-                    other_sock = other['socket']
-                    other_key = other['aes_key']
-                    other_nonce = other['aes_nonce']
+                print(f"Verified message from client {index + 1}: {plaintext.decode('utf-8', errors='ignore')}")
 
-                    try:
-                        out_cipher = AES.new(other_key, AES.MODE_EAX, nonce=other_nonce)
-                        out_ct, out_tag = out_cipher.encrypt_and_digest(plaintext)
-                        out_enc_b64 = base64.b64encode(out_ct + out_tag)
-                        # NOTE: we forward ONLY encrypted message (no sig) –
-                        # clients just decrypt and print.
-                        packet = b'||'.join([
-                            b'',             
-                            out_enc_b64,    
-                            name_b64
-                        ])
-                        other_sock.send(packet)
-                    except Exception:
-                        # ignore failed send to that client
-                        pass
+                # Forward plaintext to all OTHER clients that are connected
+                with lock:
+                    for j, other in enumerate(clients):
+                        if j == index:
+                            continue
+                        other_sock = other['socket']
+                        other_key = other['aes_key']
+                        other_nonce = other['aes_nonce']
+
+                        try:
+                            out_cipher = AES.new(other_key, AES.MODE_EAX, nonce=other_nonce)
+                            out_ct, out_tag = out_cipher.encrypt_and_digest(plaintext)
+                            out_enc_b64 = base64.b64encode(out_ct + out_tag)
+                            # NOTE: we forward ONLY encrypted message (no sig) –
+                            # clients just decrypt and print.
+                            packet = b'||'.join([
+                                b'',             
+                                out_enc_b64,    
+                                name_b64
+                            ])
+                            other_sock.send(packet)
+                        except Exception:
+                            # ignore failed send to that client
+                            pass
+
+            elif len(data_lst) == 4: # for file
+                fsig_b64, fname_b64, fenc_b64, name_b64 = data_lst
+
+                 # Decode signature and AES ciphertext+tag
+                try:
+                    fsig = base64.b64decode(fsig_b64)
+                    fenc = base64.b64decode(fenc_b64)
+                    fname = fname_b64.decode()
+                except Exception:
+                    print("Base64 file decode error from client", index + 1)
+                    continue
+
+                # Split ciphertext and tag (last 16 bytes = tag)
+                ciphertext = fenc[:-16]
+                tag = fenc[-16:]
+
+                # Decrypt with this client's AES key
+                try:
+                    cipher_aes = AES.new(aes_key, AES.MODE_EAX, nonce=aes_nonce)
+                    plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
+                except Exception:
+                    print("AES decrypt/tag verify FAILED from client", index + 1)
+                    continue
+
+                # Verify signature over the plaintext
+                h = SHA256.new(plaintext)
+                verifier = PKCS1_v1_5.new(client_pub)
+                try:
+                    verifier.verify(h, fsig)
+                except (ValueError, TypeError):
+                    print("Signature verification FAILED from client", index + 1)
+                    continue
+
+                print(f"Verified message from client {index + 1}: {fname}")
+
+                # Forward plaintext to all OTHER clients that are connected
+                with lock:
+                    for j, other in enumerate(clients):
+                        if j == index:
+                            continue
+                        other_sock = other['socket']
+                        other_key = other['aes_key']
+                        other_nonce = other['aes_nonce']
+
+                        try:
+                            out_cipher = AES.new(other_key, AES.MODE_EAX, nonce=other_nonce)
+                            out_ct, out_tag = out_cipher.encrypt_and_digest(plaintext)
+                            out_enc_b64 = base64.b64encode(out_ct + out_tag)
+                            # NOTE: we forward ONLY encrypted message (no sig) –
+                            # clients just decrypt and print.
+                            packet = b'||'.join([
+                                b'',
+                                fname_b64,             
+                                out_enc_b64,    
+                                name_b64
+                            ])
+                            other_sock.send(packet)
+                        except Exception:
+                            # ignore failed send to that client
+                            pass
+            else:
+                print("\nMalformed packet received")
 
         except Exception:
             print(f"Error in relay thread for client {index+1}")
@@ -138,10 +204,12 @@ def handle_handshake(client_socket):
     return client_public_key, aes_key, aes_nonce, None
 # SERVER SETUP
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind(('', 5000))
+port = 9999
+server.bind(('', port))
 server.listen(MAX_CLIENTS)
 
-print(f"Server listening on port 5000, up to {MAX_CLIENTS} clients...")
+print(f"Server listening on port {port}, up to {MAX_CLIENTS} clients...\n")
+print(server.getsockname())
 
 def accept_loop():
     while True:

@@ -10,7 +10,7 @@ from Crypto.Signature import PKCS1_v1_5
 # CLIENT CONNECTS TO SERVER
 server_ip = input("Enter server IP: ")  # IPv4 address
 client_name = input("Enter your name: ")
-port = 5000
+port = 9999
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.connect((server_ip, port))
@@ -80,13 +80,25 @@ def listen():
                 try:
                     parts = data.split(b'||')
 
-                    if len(parts) != 3:
-                        print("[Malformed packet received]")
+                    if len(parts) == 3: # recieved a string
+                        _, enc_b64, name_b64 = parts
+                        msg = decrypt_message(enc_b64)
+                        sender = name_b64.decode()
+                        print(f"\n{sender}: {msg}")
+                    elif len(parts) == 4: # recieved a file
+                        _, fname_b64, enc_content_b64, name_b64 = parts
+                        content = decrypt_message(enc_content_b64)
+                        sender = name_b64.decode()
+                        fname = fname_b64.decode()
+
+                        # create file and write contents
+                        with open(fname, 'w') as f:
+                            f.write(content)
+
+                        print(f"\n{sender}: {fname}")
+                    else:
+                        print("Malformed packet received")
                         continue
-                    sig_b64, enc_b64, name_b64 = parts
-                    msg = decrypt_message(enc_b64)
-                    sender = name_b64.decode()
-                    print(f"\n{sender}: {msg}")
                 except ValueError:
                     print("\n[Malformed packet received]")
 
@@ -99,14 +111,37 @@ def listen():
 def send():
     while True:
         msg = input()
-        # encrypt the message with AES
-        encrypted = encrypt_message(msg)
         name = client_name.encode()
-        # sign the plaintext message
-        sig = signature(msg.encode())
-        sig_b64 = base64.b64encode(sig)
 
-        packet = sig_b64 + b'||' + encrypted + b'||' + name
+        # check if msg is a file
+        try:
+            file = open(msg, 'r')
+            content = file.read()
+
+            # encrypt the content of file and file name with AES
+            encrypted = encrypt_message(content)
+            fname_enc = msg.encode()
+
+            # sign the contents of the file
+            sig = signature(content.encode())
+            sig_b64 = base64.b64encode(sig)
+
+            packet = sig_b64 + b'||' + fname_enc + b'||' + encrypted + b'||' + name
+
+            print("\nSending file...")
+
+            file.close()
+
+        except FileNotFoundError:
+            # encrypt the message with AES
+            encrypted = encrypt_message(msg)
+
+            # sign the plaintext message
+            sig = signature(msg.encode())
+            sig_b64 = base64.b64encode(sig)
+
+            packet = sig_b64 + b'||' + encrypted + b'||' + name
+
         s.send(packet)
 
 # Start both threads
