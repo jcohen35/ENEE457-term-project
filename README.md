@@ -21,6 +21,7 @@
       - Enter IPv4 address
     - On WSL, run ```ifconfig```
       - It will be the eth0 inet address
+  - Clients can then enter a name before entering the chat
      
 
 ## Testing
