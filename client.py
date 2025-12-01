@@ -1,6 +1,7 @@
 import socket
 import threading
 import base64
+import time
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP, AES
@@ -144,9 +145,22 @@ def send():
 
         s.send(packet)
 
+
+def heartbeat(sock):
+    while True:
+        try:
+            sock.send(b"")  # does nothing on network, but OK
+        except:
+            print("Heartbeat connection broken")
+            break
+        time.sleep(5)
+
 # Start both threads
 t_listen = threading.Thread(target=listen)
 t_send = threading.Thread(target=send)
 
 t_listen.start()
 t_send.start()
+
+t_heartbeat = threading.Thread(target=heartbeat(s), daemon=True)
+t_heartbeat.start()
