@@ -108,7 +108,6 @@ def send():
 
         packet = sig_b64 + b'||' + encrypted + b'||' + name
         s.send(packet)
-        s.send(client_name.encode())
 
 # Start both threads
 t_listen = threading.Thread(target=listen)
